@@ -2,7 +2,6 @@ from coinbase.rest import RESTClient
 import os
 import time
 import pandas as pd
-from datetime import datetime, timezone
 
 # ===== CONFIG =====
 START_DATE = 1420070400 # 2015.01.01. 00:00:00 UTC
@@ -51,26 +50,61 @@ def pick_top_alts(products, top_n=100, quote="USD"):
     return [best_by_base[b][1] for b in alt_bases_sorted[:top_n]]
 
 
-def fetch_candles(client: RESTClient, product_id: str, start: str, end: str):
-    """Letölti az adott termék napi gyertyáit SDK-val."""
-    candles = []
-    resp = client.get_candles(
-        product_id=product_id, start=start, end=end, granularity="ONE_DAY", limit=350
-    )
-    candles.extend(resp["candles"])
-    return candles
+def fetch_candles(client: RESTClient, product_id: str, start_ts: int, end_ts: int):
+    """
+    Lekéri a gyertyákat 350 napos szeletekben start_ts és end_ts között.
+    start_ts, end_ts: Unix timestamp (int)
+    """
+    SECS_PER_DAY = 24 * 60 * 60
+    MAX_DAYS = 350
+    MAX_RANGE = MAX_DAYS * SECS_PER_DAY  # 350 nap másodpercben
+
+    all_candles = []
+    current_end = end_ts
+
+    while current_end > start_ts:
+        # Szelet kezdete (max 350 nappal vissza)
+        current_start = max(start_ts, current_end - MAX_RANGE)
+
+        # API hívás
+        resp = client.get_candles(
+            product_id=product_id,
+            start=str(current_start),
+            end=str(current_end),
+            granularity="ONE_DAY",
+            limit=350,
+        )
+        candles = resp.candles
+        all_candles.extend(candles)
+
+        # Következő iteráció
+        current_end = current_start
+        time.sleep(0.25)  # rate limit védelem
+
+    return all_candles
 
 
 def normalize_candles(candles, product_id):
-    """DataFrame-et csinál az API candle-ból."""
+    """DataFrame-et csinál az API candle-listából."""
+    if not candles:
+        return pd.DataFrame()
+
+    # candles már dict-ek listája kulcsokkal: start, low, high, open, close, volume
     df = pd.DataFrame(candles)
-    if df.empty:
-        return df
-    df.columns = ["start", "low", "high", "open", "close", "volume"]
+
+    # Biztosítsuk a mezők sorrendjét
+    expected_cols = ["start", "low", "high", "open", "close", "volume"]
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = None  # ha hiányzik, töltsük fel
+
+    df = df[expected_cols]
+
+    # start timestamp konvertálás
     df["time"] = pd.to_datetime(df["start"], unit="s", utc=True)
     df["product_id"] = product_id
-    df = df.sort_values("time").reset_index(drop=True)
-    return df
+
+    return df.sort_values("time").reset_index(drop=True)
 
 
 def main():
@@ -93,7 +127,7 @@ def main():
 
     for pid in all_pids:
         print(f"Downloading candles for {pid}...")
-        candles = fetch_candles(client, pid, str(START_DATE), str(int(time.time())))
+        candles = fetch_candles(client, pid, START_DATE, int(time.time()))
         if not candles:
             print(f"  No candles for {pid}")
             continue
