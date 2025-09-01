@@ -5,9 +5,10 @@ import pandas as pd
 
 # ===== CONFIG =====
 START_DATE = 1420070400 # 2015.01.01. 00:00:00 UTC
+END_DATE = 1756677600 # 2025.09.01. 00:00:00 UTC
 QUOTE_CURRENCY = "USD"
 TOP_ALTCOIN_COUNT = 100
-EXPLICIT = ["BTC", "ETH", "ARB", "GLMR"]
+EXPLICIT = ["BTC", "ETH", "ARB"]
 SLEEP_BETWEEN_CALLS = 0.25
 
 
@@ -85,26 +86,31 @@ def fetch_candles(client: RESTClient, product_id: str, start_ts: int, end_ts: in
 
 
 def normalize_candles(candles, product_id):
-    """DataFrame-et csinál az API candle-listából."""
+    """
+    Kiegyensúlyozott DataFrame készítése candle listából:
+    mindig ugyanazok az oszlopok, candle-ből töltve.
+    """
     if not candles:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["start", "low", "high", "open", "close", "volume", "time", "product_id"])
 
-    # candles már dict-ek listája kulcsokkal: start, low, high, open, close, volume
-    df = pd.DataFrame(candles)
+    rows = []
+    for c in candles:
+        row = {
+            "start": c.start,
+            "low": float(c.low),
+            "high": float(c.high),
+            "open": float(c.open),
+            "close": float(c.close),
+            "volume": float(c.volume)
+        }
+        rows.append(row)
 
-    # Biztosítsuk a mezők sorrendjét
-    expected_cols = ["start", "low", "high", "open", "close", "volume"]
-    for col in expected_cols:
-        if col not in df.columns:
-            df[col] = None  # ha hiányzik, töltsük fel
-
-    df = df[expected_cols]
-
-    # start timestamp konvertálás
+    df = pd.DataFrame(rows, columns=["start", "low", "high", "open", "close", "volume"])
     df["time"] = pd.to_datetime(df["start"], unit="s", utc=True)
     df["product_id"] = product_id
 
     return df.sort_values("time").reset_index(drop=True)
+
 
 
 def main():
@@ -127,12 +133,12 @@ def main():
 
     for pid in all_pids:
         print(f"Downloading candles for {pid}...")
-        candles = fetch_candles(client, pid, START_DATE, int(time.time()))
+        candles = fetch_candles(client, pid, START_DATE, END_DATE) #end_ts
         if not candles:
             print(f"  No candles for {pid}")
             continue
         df = normalize_candles(candles, pid)
-        fname = pid.replace("-", "_") + "_1d.csv"
+        fname = "./candles/1d/" + pid.replace("-", "_") + "_1d.csv"
         df.to_csv(fname, index=False)
         print(f"  Saved {len(df)} rows -> {fname}")
         time.sleep(SLEEP_BETWEEN_CALLS)
